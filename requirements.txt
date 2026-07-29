@@ -26,6 +26,9 @@ sendgrid==6.11.0
 pydantic==2.10.6
 email-validator==2.1.1
 
+# Importação de planilha (scripts/importar_base.py, não a API)
+openpyxl==3.1.5
+
 # Dependencies
 # 4.12.2 é o mínimo que o pydantic 2.10 exige.
 typing-extensions==4.12.2

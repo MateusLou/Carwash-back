@@ -37,6 +37,34 @@ target_metadata = Base.metadata
 config.set_main_option("sqlalchemy.url", DATABASE_URL.replace("%", "%%"))
 
 
+# Os únicos schemas que este projeto gerencia. None = o schema padrão (public).
+SCHEMAS_GERENCIADOS = {None, "public", "operacao"}
+
+
+def include_name(name, type_, parent_names):
+    """Filtra o que o autogenerate enxerga.
+
+    Sem isso, `include_schemas=True` faz o Alembic varrer o banco INTEIRO — e um
+    projeto Supabase vem com `auth`, `storage`, `realtime`, `extensions` e
+    `graphql` já povoados. O autogenerate os veria como tabelas "sobrando" na
+    metadata e geraria uma migration cheia de DROP TABLE em cima da
+    infraestrutura do Supabase. Ligar a flag sem este filtro é destrutivo.
+    """
+    if type_ == "schema":
+        return name in SCHEMAS_GERENCIADOS
+    return True
+
+
+# Opções compartilhadas entre os modos offline e online — para as duas rodadas
+# enxergarem exatamente os mesmos schemas.
+opcoes_contexto = {
+    "target_metadata": target_metadata,
+    "include_schemas": True,
+    "include_name": include_name,
+    "compare_type": True,
+}
+
+
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode.
 
@@ -52,9 +80,9 @@ def run_migrations_offline() -> None:
     url = config.get_main_option("sqlalchemy.url")
     context.configure(
         url=url,
-        target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        **opcoes_contexto,
     )
 
     with context.begin_transaction():
@@ -75,9 +103,7 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
-        context.configure(
-            connection=connection, target_metadata=target_metadata
-        )
+        context.configure(connection=connection, **opcoes_contexto)
 
         with context.begin_transaction():
             context.run_migrations()

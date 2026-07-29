@@ -1,8 +1,16 @@
-# carwash-back — API do dashboard do Lava-Rápido Nogueira
+# carwash-back — API da plataforma do Lava-Rápido Nogueira
 
 API em **FastAPI + SQLAlchemy + Alembic** seguindo o template de backend da empresa.
-Lê as tabelas `agendamentos` e `conversas` do **Postgres do Supabase** — as mesmas que o
-chatbot em n8n escreve — e serve o [carwash-front](../carwash-front).
+Serve o [carwash-front](../carwash-front) e conversa com **um único Postgres do Supabase**,
+dividido em dois schemas:
+
+| Schema | De quem é | Tabelas |
+| --- | --- | --- |
+| `public` | o chatbot de WhatsApp (n8n) e o login | `agendamentos`, `conversas`, `users` |
+| `operacao` | a plataforma | `clientes`, `veiculos`, `funcionarios`, `lavagens`, `importacoes` |
+
+Mesma conexão, dois donos. É o que permite cruzar o agendamento feito pelo WhatsApp com a
+lavagem executada — sem misturar as tabelas de quem escreve com as de quem lê.
 
 ## Como o código é organizado
 
@@ -23,8 +31,9 @@ app.py recebe a chamada
 | `src/app.py` | Sobe o FastAPI, o CORS e **descobre as rotas sozinho** varrendo `use_cases/**/index.py` |
 | `src/config/` | O que muda por ambiente (URL do front) |
 | `src/database/` | Conexão, sessão e `Base` do SQLAlchemy — a única parte que sabe que o banco é Postgres |
-| `src/entities/` | O conceito **para o negócio** (Pydantic). `Agendamento.pode_mudar_para()`, `Conversa.esta_em_modo_humano()` |
-| `src/models/` | O mesmo conceito **para o banco** (SQLAlchemy). Espelha [`supabase/schema.sql`](../supabase/schema.sql) |
+| `src/entities/` | O conceito **para o negócio** (Pydantic). `Lavagem.pode_mudar_para()`, `calcular_nps()`, `Conversa.esta_em_modo_humano()` |
+| `src/models/` | O mesmo conceito **para o banco** (SQLAlchemy). Os de `public` espelham [`supabase/schema.sql`](../supabase/schema.sql) |
+| `scripts/` | Importador de planilha e diagnóstico de conexão (não fazem parte da API) |
 | `src/repositories/` | A única camada que escreve query |
 | `src/use_cases/` | O que o sistema faz — uma subpasta por ação |
 | `src/middlewares/` | O porteiro: valida o cookie de sessão antes da rota rodar |
@@ -50,15 +59,49 @@ python3 -m venv venv && source venv/bin/activate && pip install -r requirements.
 cp .env.example .env
 ```
 
-Preencha com os dados do Supabase (**Project Settings → Database → Connection string**) e
-gere um `USER_JWT_SECRET`:
+Depois preencha a `DATABASE_URL`. O jeito mais seguro é pelo script — a digitação fica
+oculta, então a senha não entra no histórico do shell:
+
+```bash
+python scripts/configurar_banco.py
+```
+
+Ele recusa as três colagens que quebram depois: porta 6543, host direto (IPv6) e a URI com
+o `[YOUR-PASSWORD]` ainda por trocar.
+
+Para gerar os segredos da aplicação, caso precise refazê-los:
 
 ```bash
 python -c "import secrets; print(secrets.token_hex(32))"
 ```
 
-> Use a conexão **direta** (porta `5432`), não o pooler em modo transaction (`6543`): o
-> Alembic depende de statements que o pooler não suporta bem.
+### Qual das três conexões do Supabase usar
+
+| Opção no painel | Porta | Usar? |
+| --- | --- | --- |
+| **Session pooler** | 5432 | ✅ **esta**. Atende em IPv4 e mantém prepared statements, então o Alembic roda |
+| Direct connection | 5432 | só se a máquina tiver IPv6 — `db.<ref>.supabase.co` **não tem registro A** |
+| Transaction pooler | 6543 | ❌ o Alembic não funciona: o modo não mantém statements entre comandos |
+
+O sintoma de escolher a direta sem IPv6 é um timeout silencioso na conexão, não um erro
+claro de rede. Para saber se a sua máquina tem rota IPv6:
+
+```bash
+curl -6 -s -m 5 -o /dev/null -w "%{http_code}\n" https://api64.ipify.org
+```
+
+`000` significa sem IPv6 → use o Session pooler.
+
+### Conferindo antes de migrar
+
+```bash
+python scripts/checar_conexao.py
+```
+
+Diz se a URI está alcançável, qual pooler você pegou, se as tabelas do bot já existem e
+quantas lavagens já foram importadas. **Nunca imprime a senha.** Vale rodar antes do
+`alembic upgrade head`: os três erros comuns aqui (IPv6, porta 6543, senha) produzem
+sintomas confusos, e este script os separa.
 
 ### 3. Banco
 
@@ -91,16 +134,75 @@ uvicorn src.app:app --reload
 | `POST` | `/user/auth/pwd/recovery/email` | Gera token de recuperação de senha |
 | `POST` | `/user/auth/reset/pwd` | Troca a senha usando o token |
 
-### Dashboard (todas exigem sessão válida)
+### Operação — registrar a rotina
 
 | Método | Rota | O que faz |
 | --- | --- | --- |
-| `GET` | `/agendamentos` | Lista com filtros `data_inicio`, `data_fim`, `status`, `servico` |
-| `GET` | `/agendamentos/metricas` | Totais por status, por serviço e série por dia |
-| `PATCH` | `/agendamentos/{id}/status` | Confirmar / concluir / cancelar |
-| `GET` | `/conversas/modo-humano` | Contatos ainda aguardando um atendente |
+| `POST` | `/lavagens/chegada` | Check-in: telefone, placa, porte. Carimba `chegou_em` |
+| `PATCH` | `/lavagens/{id}/status` | Avança a etapa, carimba o horário e **fecha a duração do trecho** |
+| `PATCH` | `/lavagens/{id}/pagamento` | Preço, forma de pagamento e NPS |
+| `GET` | `/lavagens/patio` | O que está aberto agora, com o tempo parado em cada etapa |
+| `GET` | `/lavagens` | Histórico, com filtros e paginação |
+| `GET` | `/clientes?busca=` | Autocomplete do check-in (por nome ou telefone) |
 
-Sem o cookie, essas rotas respondem **401** — o middleware barra antes do use case rodar.
+### Dashboard — os números
+
+| Método | Rota | O que faz |
+| --- | --- | --- |
+| `GET` | `/dashboard/resumo` | Os cards do topo, incluindo NPS e período disponível |
+| `GET` | `/dashboard/operacional` | Tempos (média e p90), etapas, produtividade |
+| `GET` | `/dashboard/comercial` | Receita, ticket, quebra por pagamento, porte e CNPJ |
+| `GET` | `/dashboard/satisfacao` | NPS, distribuição e nota do Google |
+
+Os quatro aceitam `data_inicio`, `data_fim` e `granularidade` (`dia`|`semana`|`mes`).
+
+### Bot de WhatsApp
+
+| Método | Rota | O que faz |
+| --- | --- | --- |
+| `GET` | `/agendamentos` · `/agendamentos/metricas` | Agendamentos criados pelo chatbot |
+| `PATCH` | `/agendamentos/{id}/status` | Confirmar / concluir / cancelar |
+| `GET` | `/conversas/modo-humano` | Contatos aguardando um atendente |
+
+**Todas** exigem sessão válida. Sem o cookie respondem **401** — o middleware barra antes
+de o use case rodar.
+
+## Os cinco estados de uma lavagem
+
+Não são decoração: cada transição carimba um horário, e a diferença entre dois carimbos
+**é exatamente uma das durações que a base histórica já traz pronta**.
+
+```
+aguardando ──inicia──> em_lavagem ──termina──> pronta ──cliente busca──> concluida
+    │                        │                    │
+ chegou_em            iniciou_lavagem_em   terminou_lavagem_em        saiu_em
+    └──── espera ────────────┘                    └──── pós-lavagem ──────┘
+```
+
+É isso que faz a lavagem registrada hoje e as 37 mil importadas caírem no mesmo gráfico:
+a **duração em minutos é sempre a fonte das métricas**; quem tem carimbo calcula a duração
+e grava. Linha importada não tem relógio (os registros viviam no papel) — só duração.
+
+## Importar uma planilha
+
+```bash
+python scripts/importar_base.py --arquivo "../base tratada.xlsx"
+```
+
+Reimportar o mesmo arquivo não duplica nada: `id_externo` (o `id_lavagem` da planilha) tem
+índice único.
+
+O importador foi feito para a base que **ainda vai chegar**, em três camadas:
+
+1. **Mapa de colunas** — o que a base de hoje tem.
+2. **Apelidos** — nomes prováveis do que hoje falta (`telefone`, `placa`, `horario_chegada`,
+   `horario_saida`…). Se vierem com um desses nomes, entram na coluna certa sozinhas.
+3. **`dados_extras` (jsonb)** — coluna desconhecida não derruba a importação: vai para o
+   jsonb e o script avisa no fim quais foram. Depois se decide quais viram coluna própria,
+   via migration.
+
+> A base de hoje **não tem telefone nem placa**, e não tem horário de relógio. Esses campos
+> existem no banco e nascem vazios; quem os preenche é o check-in, daqui pra frente.
 
 ## Migrations
 
@@ -123,9 +225,16 @@ alembic downgrade -1     # desfaz a última
 alembic revision --autogenerate -m "check"
 ```
 
-A migration tem que sair **vazia**. Se vier com alterações em `agendamentos` ou
-`conversas`, o model divergiu do `schema.sql` — corrija o model, não o banco. Depois,
-apague o arquivo de teste.
+A migration tem que sair **vazia** (só um `pass` no `upgrade`). Se vier com alterações em
+`agendamentos` ou `conversas`, o model divergiu do `schema.sql` — corrija o model, não o
+banco. Depois, apague o arquivo de teste.
+
+> ⚠️ **O filtro de schemas do `env.py` não é opcional.** Para enxergar o schema `operacao`,
+> o Alembic precisa de `include_schemas=True` — e com essa flag ligada ele passa a varrer o
+> banco inteiro. Um projeto Supabase vem com `auth`, `storage`, `realtime` e `extensions`
+> já povoados; sem o `include_name` que restringe a `public` e `operacao`, o autogenerate
+> geraria uma migration cheia de `DROP TABLE` em cima da infraestrutura do Supabase.
+> Se o `check` acima citar qualquer um desses schemas, **não aplique** — o filtro quebrou.
 
 ## Diferenças em relação ao template
 
@@ -139,3 +248,8 @@ apague o arquivo de teste.
    incompleta.
 4. **CORS restrito ao `client_url`** em vez de `*`: navegador nenhum aceita curinga junto
    com `allow_credentials=True`, e a autenticação aqui é por cookie.
+5. **Três pins subidos no `requirements.txt`** (SQLAlchemy 2.0.36, pydantic 2.10.6,
+   typing-extensions 4.12.2): os do template não instalam nem rodam em Python 3.13. Cada
+   um tem o motivo comentado no arquivo.
+6. **Um schema além do `public`** — o template não previa mais de um. O que isso exige do
+   Alembic está no aviso acima.

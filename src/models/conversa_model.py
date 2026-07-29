@@ -14,12 +14,21 @@ class ConversaModel(Base):
     __tablename__ = "conversas"
 
     telefone = Column(Text, primary_key=True)
-    status = Column(Text, nullable=False, server_default=text("'bot'"))
+    # os comment= repetem os `comment on` do schema.sql: sem eles, todo
+    # autogenerate propõe apagar a documentação que já está no banco
+    status = Column(
+        Text, nullable=False, server_default=text("'bot'"),
+        comment="bot = respondido pela IA | humano = pausado, atendente assume.",
+    )
     motivo = Column(Text, nullable=True)
-    atualizado_em = Column(TIMESTAMP(timezone=True), nullable=False, server_default=text("now()"))
+    atualizado_em = Column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()"),
+        comment="Momento da transferência. O bot volta a responder 2h depois deste horário.",
+    )
 
     __table_args__ = (
         CheckConstraint("status in ('bot','humano')", name="conversas_status_check"),
+        {"comment": "Estado de cada conversa: bot (automático) ou humano (transferido)."},
     )
 
     def __repr__(self):
