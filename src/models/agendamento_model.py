@@ -16,6 +16,8 @@ class AgendamentoModel(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"))
     created_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=text("now()"))
+    # os comment= abaixo repetem os `comment on` do schema.sql: sem eles, todo
+    # autogenerate propõe apagar a documentação que já está no banco
 
     # dados do cliente
     nome_cliente = Column(Text, nullable=True)
@@ -27,11 +29,17 @@ class AgendamentoModel(Base):
 
     # dados do serviço
     servico = Column(Text, nullable=False, server_default=text("'Lavagem completa'"))
-    data_agendamento = Column(Date, nullable=False)
-    horario = Column(Time, nullable=False)
+    data_agendamento = Column(
+        Date, nullable=False,
+        comment="Dia do agendamento (o dashboard filtra por período por esta coluna).",
+    )
+    horario = Column(Time, nullable=False, comment="Horário do slot agendado.")
 
     # controle
-    status = Column(Text, nullable=False, server_default=text("'pendente'"))
+    status = Column(
+        Text, nullable=False, server_default=text("'pendente'"),
+        comment="pendente | confirmado | concluido | cancelado",
+    )
     observacoes = Column(Text, nullable=True)
 
     __table_args__ = (
@@ -42,6 +50,7 @@ class AgendamentoModel(Base):
         Index("idx_agendamentos_data_horario", "data_agendamento", "horario"),
         Index("idx_agendamentos_status", "status"),
         Index("idx_agendamentos_telefone", "telefone"),
+        {"comment": "Agendamentos do Lava-Rápido Nogueira feitos pelo chatbot de WhatsApp."},
     )
 
     def __repr__(self):
