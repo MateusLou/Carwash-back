@@ -17,3 +17,4 @@ class RegistrarChegadaDTO(BaseModel):
     servico: Optional[str] = None
     funcionario_lavagem_id: Optional[int] = None
     observacoes: Optional[str] = None
+    danos_vistoria: Optional[list[str]] = None

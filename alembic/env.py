@@ -40,6 +40,16 @@ config.set_main_option("sqlalchemy.url", DATABASE_URL.replace("%", "%%"))
 # Os únicos schemas que este projeto gerencia. None = o schema padrão (public).
 SCHEMAS_GERENCIADOS = {None, "public", "operacao"}
 
+# Tabelas que vivem no `public` mas NÃO são geridas por este ORM: elas nascem e
+# morrem no supabase/schema.sql. Sem este filtro, o autogenerate as vê como
+# "sobrando" na metadata e emite `op.drop_table` para cada uma.
+#
+# Por que isso é grave: `agenda_config` é lida pelo trigger
+# `agendamentos_limite_capacidade` a CADA insert em `agendamentos`. Se a tabela
+# some, o trigger levanta 42P01 e o chatbot para de agendar por completo — e a
+# RPC `agenda_criar_agendamento` só captura P0001, então o erro sobe cru.
+PREFIXOS_FORA_DO_ORM = ("agenda_",)
+
 
 def include_name(name, type_, parent_names):
     """Filtra o que o autogenerate enxerga.
@@ -52,6 +62,8 @@ def include_name(name, type_, parent_names):
     """
     if type_ == "schema":
         return name in SCHEMAS_GERENCIADOS
+    if type_ == "table" and name is not None:
+        return not name.startswith(PREFIXOS_FORA_DO_ORM)
     return True
 
 
