@@ -39,6 +39,13 @@ class RegistrarChegadaUseCase:
             modelo=chegada_dto.modelo_carro,
         )
 
+        dados_extras = {}
+        if chegada_dto.danos_vistoria:
+            dados_extras["vistoria"] = {
+                "danos": chegada_dto.danos_vistoria,
+                "registrada_em": agora.isoformat(),
+            }
+
         lavagem = LavagemModel(
             origem="plataforma",
             status="aguardando",
@@ -46,11 +53,10 @@ class RegistrarChegadaUseCase:
             chegou_em=agora,
             cliente_id=cliente.id if cliente else None,
             veiculo_id=veiculo.id if veiculo else None,
-            # tipo_carro fica na própria lavagem além de no veículo: é o que
-            # mantém a métrica por porte funcionando para quem chega sem placa
             tipo_carro=chegada_dto.tipo_carro or (veiculo.tipo if veiculo else None),
             funcionario_lavagem_id=chegada_dto.funcionario_lavagem_id,
             observacoes=chegada_dto.observacoes,
+            dados_extras=dados_extras,
         )
         if chegada_dto.servico:
             lavagem.servico = chegada_dto.servico
