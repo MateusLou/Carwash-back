@@ -20,6 +20,7 @@ def list_lavagens(
     funcionario_id: Optional[int] = None,
     tipo_carro: Optional[str] = None,
     cliente_id: Optional[int] = None,
+    cliente_nome: Optional[str] = Query(None, description="Parte do nome do cliente"),
     limite: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
@@ -31,6 +32,7 @@ def list_lavagens(
         funcionario_id=funcionario_id,
         tipo_carro=tipo_carro,
         cliente_id=cliente_id,
+        cliente_nome=cliente_nome,
         limite=limite,
         offset=offset,
     )

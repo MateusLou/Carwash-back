@@ -3,7 +3,9 @@ from sqlalchemy import func, distinct, cast, literal, Date
 from repositories.base_repository import BaseRepository
 from models.lavagem_model import LavagemModel
 from models.funcionario_model import FuncionarioModel
+from models.cliente_model import ClienteModel
 from entities.lavagem import STATUS_ABERTOS
+from utils.normalizar_texto import normalizar_texto
 from datetime import date
 from typing import Optional
 from uuid import UUID
@@ -99,6 +101,7 @@ class LavagemRepository(BaseRepository[LavagemModel]):
         funcionario_id: Optional[int] = None,
         tipo_carro: Optional[str] = None,
         cliente_id: Optional[int] = None,
+        cliente_nome: Optional[str] = None,
     ):
         if data_inicio is not None:
             query = query.filter(self.model.data >= data_inicio)
@@ -112,6 +115,19 @@ class LavagemRepository(BaseRepository[LavagemModel]):
             query = query.filter(self.model.tipo_carro == tipo_carro)
         if cliente_id is not None:
             query = query.filter(self.model.cliente_id == cliente_id)
+        if cliente_nome:
+            # Subquery em vez de join: esta função é a base de todo o dashboard
+            # (via _validas), e um join a mais mudaria a cardinalidade daquelas
+            # agregações — além de colidir com o join que
+            # produtividade_por_funcionario já faz.
+            # O LIKE cai sobre nome_normalizado, que já está sem acento e em
+            # minúsculas: é o mesmo truque de ClienteRepository.buscar, e por
+            # isso "jose" acha "José" sem precisar de ILIKE.
+            alvo = normalizar_texto(cliente_nome)
+            clientes = self.session.query(ClienteModel.id).filter(
+                ClienteModel.nome_normalizado.like(f"%{alvo}%")
+            )
+            query = query.filter(self.model.cliente_id.in_(clientes))
         return query
 
     def list_by_filtros(self, limite: int = 200, offset: int = 0, **filtros) -> list[LavagemModel]:

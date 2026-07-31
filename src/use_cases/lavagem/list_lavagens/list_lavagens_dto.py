@@ -12,6 +12,7 @@ class ListLavagensDTO(BaseModel):
     funcionario_id: Optional[int] = None
     tipo_carro: Optional[str] = None
     cliente_id: Optional[int] = None
+    cliente_nome: Optional[str] = None
     # Teto no limite: são 37 mil lavagens no banco, e uma listagem sem limite
     # travaria a tela.
     limite: int = Field(default=100, ge=1, le=500)
