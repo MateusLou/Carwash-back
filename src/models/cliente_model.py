@@ -30,12 +30,10 @@ class ClienteModel(Base):
         # Comum, não único: com o CPF fazendo o papel de identidade, dois
         # homônimos de CPF diferente têm de caber. Serve só para a busca.
         Index("ix_clientes_nome_normalizado", "nome_normalizado"),
-        Index(
-            "uq_clientes_telefone",
-            "telefone",
-            unique=True,
-            postgresql_where=text("telefone is not null"),
-        ),
+        # Comum, não único: o mesmo número serve mais de um cadastro — casal
+        # que divide o celular, CPF novo chegando com o telefone de um cadastro
+        # antigo. Um único aqui derrubava o check-in com IntegrityError.
+        Index("ix_clientes_telefone", "telefone"),
         {"schema": "operacao"},
     )
 

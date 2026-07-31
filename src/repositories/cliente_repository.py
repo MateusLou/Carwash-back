@@ -23,9 +23,12 @@ class ClienteRepository(BaseRepository[ClienteModel]):
         )
 
     def get_by_telefone(self, telefone: str) -> ClienteModel | None:
+        """Telefone repete entre cadastros; na dúvida, vale o mexido por último —
+        é o dono mais provável do número hoje."""
         return (
             self.session.query(self.model)
             .filter(self.model.telefone == normalizar_telefone(telefone))
+            .order_by(self.model.atualizado_em.desc(), self.model.id.desc())
             .first()
         )
 
@@ -70,6 +73,9 @@ class ClienteRepository(BaseRepository[ClienteModel]):
         **sobrescrevem** o que estava lá: a tela mostra os dois preenchidos e
         editáveis, então uma correção do atendente tem de valer. Nos outros
         casos vale a regra antiga, de só preencher o que está vazio.
+
+        Telefone pode repetir entre cadastros: o mesmo número serve um casal,
+        ou um CPF novo que chega com o número de um cadastro antigo.
         """
         cpf_norm = normalizar_cpf(cpf) if cpf else None
         telefone_norm = normalizar_telefone(telefone) if telefone else None
@@ -112,7 +118,6 @@ class ClienteRepository(BaseRepository[ClienteModel]):
             telefone_norm
             and cliente.telefone != telefone_norm
             and (achado_por_cpf or not cliente.telefone)
-            and self._telefone_livre(telefone_norm, cliente.id)
         ):
             cliente.telefone = telefone_norm
             mudou = True
@@ -121,13 +126,3 @@ class ClienteRepository(BaseRepository[ClienteModel]):
             self.session.commit()
             self.session.refresh(cliente)
         return cliente
-
-    def _telefone_livre(self, telefone: str, cliente_id: int) -> bool:
-        """O telefone é único no banco.
-
-        Um dígito errado do atendente não pode derrubar o check-in com
-        IntegrityError: quando o número já é de outro cadastro, este fica com o
-        telefone antigo e a lavagem entra assim mesmo.
-        """
-        dono = self.get_by_telefone(telefone)
-        return dono is None or dono.id == cliente_id

@@ -37,14 +37,14 @@ class AgendamentoModel(Base):
 
     # controle
     status = Column(
-        Text, nullable=False, server_default=text("'pendente'"),
-        comment="pendente | confirmado | concluido | cancelado",
+        Text, nullable=False, server_default=text("'confirmado'"),
+        comment="confirmado | concluido | cancelado",
     )
     observacoes = Column(Text, nullable=True)
 
     __table_args__ = (
         CheckConstraint(
-            "status in ('pendente','confirmado','concluido','cancelado')",
+            "status in ('confirmado','concluido','cancelado')",
             name="agendamentos_status_check",
         ),
         Index("idx_agendamentos_data_horario", "data_agendamento", "horario"),

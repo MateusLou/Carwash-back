@@ -3,14 +3,15 @@ from typing import Optional, Literal, get_args
 from datetime import date, time, datetime
 from uuid import UUID
 
-StatusAgendamento = Literal["pendente", "confirmado", "concluido", "cancelado"]
+# Sem "pendente": agendamento de WhatsApp já nasce confirmado — o cliente
+# pediu, o bot checou a vaga e gravou. Não há confirmação extra a esperar.
+StatusAgendamento = Literal["confirmado", "concluido", "cancelado"]
 
 STATUS_VALIDOS: tuple[str, ...] = get_args(StatusAgendamento)
 
 # Regra de negócio: o agendamento anda para frente. Concluído e cancelado são
 # pontos finais — para voltar atrás, cria-se um agendamento novo.
 TRANSICOES_PERMITIDAS: dict[str, tuple[str, ...]] = {
-    "pendente": ("confirmado", "cancelado"),
     "confirmado": ("concluido", "cancelado"),
     "concluido": (),
     "cancelado": (),
@@ -43,7 +44,7 @@ class Agendamento(BaseModel):
     horario: time
 
     # controle
-    status: StatusAgendamento = "pendente"
+    status: StatusAgendamento = "confirmado"
     observacoes: Optional[str] = None
 
     def pode_mudar_para(self, novo_status: str) -> bool:

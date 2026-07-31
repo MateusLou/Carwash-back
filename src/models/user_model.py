@@ -10,6 +10,9 @@ class UserModel(Base):
     email = Column(String(100), unique=True, index=True, nullable=False)
     age = Column(Integer, nullable=True)
     is_active = Column(Boolean, default=True)
+    # 'dono' vê a plataforma inteira; 'funcionario' opera tudo menos o painel
+    # de números. Nasce funcionario: privilégio se concede, não se herda.
+    role = Column(String(20), nullable=False, server_default="funcionario")
     reset_pwd_token = Column(String(255), nullable=True)
     reset_pwd_token_sent_at = Column(Float, nullable=True)
     

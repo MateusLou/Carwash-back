@@ -9,6 +9,7 @@ class User(BaseModel):
     password: str
     age: Optional[int] = None
     is_active: bool = True
+    role: str = "funcionario"
     reset_pwd_token: Optional[str] = None
     reset_pwd_token_sent_at: Optional[float] = None
 

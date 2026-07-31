@@ -17,7 +17,7 @@ def list_agendamentos(
     response: Response,
     data_inicio: Optional[date] = Query(None, description="Filtra a partir desta data (AAAA-MM-DD)"),
     data_fim: Optional[date] = Query(None, description="Filtra até esta data (AAAA-MM-DD)"),
-    status: Optional[str] = Query(None, description="pendente | confirmado | concluido | cancelado"),
+    status: Optional[str] = Query(None, description="confirmado | concluido | cancelado"),
     servico: Optional[str] = Query(None, description="Nome exato do serviço"),
     db: Session = Depends(get_db),
 ):
