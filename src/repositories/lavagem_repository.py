@@ -6,6 +6,7 @@ from models.funcionario_model import FuncionarioModel
 from entities.lavagem import STATUS_ABERTOS
 from datetime import date
 from typing import Optional
+from uuid import UUID
 
 # "semana"/"mes" do filtro do dashboard → o argumento que o date_trunc entende.
 GRANULARIDADES = {"dia": "day", "semana": "week", "mes": "month"}
@@ -46,6 +47,33 @@ class LavagemRepository(BaseRepository[LavagemModel]):
 
     def get_by_id_externo(self, id_externo: int) -> LavagemModel | None:
         return self.session.query(self.model).filter(self.model.id_externo == id_externo).first()
+
+    def get_by_agendamento_id(self, agendamento_id: UUID) -> LavagemModel | None:
+        """A lavagem que nasceu deste agendamento, se o carro já chegou.
+
+        É a trava do check-in: um agendamento vira um carro no pátio, não dois.
+        """
+        return (
+            self.session.query(self.model)
+            .filter(self.model.agendamento_id == agendamento_id)
+            .first()
+        )
+
+    def mapa_por_agendamentos(self, agendamento_ids: list[UUID]) -> dict[UUID, LavagemModel]:
+        """A lavagem de cada agendamento da página, numa consulta só.
+
+        A aba de agendamentos mostra em que ponto o carro está; perguntar isso
+        linha a linha seria uma ida ao Supabase por agendamento.
+        """
+        if not agendamento_ids:
+            return {}
+        lavagens = (
+            self.session.query(self.model)
+            .filter(self.model.agendamento_id.in_(agendamento_ids))
+            .order_by(self.model.id)
+            .all()
+        )
+        return {lavagem.agendamento_id: lavagem for lavagem in lavagens}
 
     def list_patio(self) -> list[LavagemModel]:
         """O que está aberto agora, do que chegou primeiro para o mais recente."""

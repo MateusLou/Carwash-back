@@ -34,6 +34,7 @@ class GetPatioUseCase:
                 {
                     **Lavagem.com_nomes(modelo).model_dump(),
                     "parado_ha_min": minutos_entre(desde, agora),
+                    "contrato": self._resumo_contrato(modelo),
                 }
             )
 
@@ -47,3 +48,15 @@ class GetPatioUseCase:
             "por_status": por_status,
             "data": itens,
         }
+
+    def _resumo_contrato(self, modelo) -> dict | None:
+        """Se o termo de adesão chegou ao cliente — é o que decide se o card
+        mostra o botão de reenviar.
+
+        None para lavagem anterior à emissão automática (ou importada): sem
+        registro não há o que reenviar nem o que avisar.
+        """
+        registro = (modelo.dados_extras or {}).get("contrato")
+        if registro is None:
+            return None
+        return {"enviada": bool(registro.get("ok")), "motivo": registro.get("motivo")}

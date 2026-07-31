@@ -1,6 +1,7 @@
 from use_cases.agendamento.list_agendamentos.list_agendamentos_use_case import ListAgendamentosUseCase
 from use_cases.agendamento.list_agendamentos.list_agendamentos_dto import ListAgendamentosDTO
 from repositories.agendamento_repository import AgendamentoRepository
+from repositories.lavagem_repository import LavagemRepository
 from middlewares.validate_user_auth_token import validate_user_auth_token
 from fastapi import APIRouter, Depends, Response, Query
 from sqlalchemy.orm import Session
@@ -23,6 +24,7 @@ def list_agendamentos(
     list_agendamentos_dto = ListAgendamentosDTO(
         data_inicio=data_inicio, data_fim=data_fim, status=status, servico=servico
     )
-    agendamento_repository = AgendamentoRepository(db)
-    list_agendamentos_use_case = ListAgendamentosUseCase(agendamento_repository)
+    list_agendamentos_use_case = ListAgendamentosUseCase(
+        AgendamentoRepository(db), LavagemRepository(db)
+    )
     return list_agendamentos_use_case.execute(list_agendamentos_dto, response)

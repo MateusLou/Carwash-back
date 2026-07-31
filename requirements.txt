@@ -34,6 +34,13 @@ email-validator==2.1.1
 # Importação de planilha (scripts/importar_base.py, não a API)
 openpyxl==3.1.5
 
+# PDF do termo de adesão (src/utils/gerar_pdf.py)
+# fpdf2 e não reportlab: é py3-none-any (Python puro), imune à praga de wheel
+# para 3.13 que já forçou os pins do SQLAlchemy, psycopg2 e pydantic acima —
+# o reportlab carrega extensões C. Traz Pillow de arrasto; nada no projeto
+# decodifica imagem de terceiro com ele.
+fpdf2==2.8.7
+
 # Dependencies
 # 4.12.2 é o mínimo que o pydantic 2.10 exige.
 typing-extensions==4.12.2

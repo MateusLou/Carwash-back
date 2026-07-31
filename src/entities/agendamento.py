@@ -54,3 +54,30 @@ class Agendamento(BaseModel):
         """Cancelado não conta na ocupação do slot — mesma regra da view
         vw_ocupacao_slots que o bot consulta para oferecer horário livre."""
         return self.status != "cancelado"
+
+    @classmethod
+    def com_chegada(cls, model, lavagem=None) -> "AgendamentoComChegada":
+        """Monta a versão que vai para a aba, com a lavagem vinculada.
+
+        `lavagem` é None quando o carro ainda não chegou — a maioria das linhas
+        de um dia que está começando.
+        """
+        base = cls.model_validate(model)
+        return AgendamentoComChegada(
+            **base.model_dump(),
+            lavagem_id=getattr(lavagem, "id", None),
+            lavagem_status=getattr(lavagem, "status", None),
+        )
+
+
+class AgendamentoComChegada(Agendamento):
+    """O agendamento como a aba precisa dele: com a lavagem que nasceu da chegada.
+
+    A tabela de agendamentos é do bot do WhatsApp e não tem status de chegada —
+    a informação vem de operacao.lavagens.agendamento_id, preenchido no
+    check-in. Por isso são dois campos e não um: além de saber que o carro
+    chegou, a tela mostra em que ponto ele está.
+    """
+
+    lavagem_id: Optional[int] = None
+    lavagem_status: Optional[str] = None
