@@ -3,6 +3,7 @@ from use_cases.lavagem.registrar_chegada.registrar_chegada_dto import RegistrarC
 from repositories.lavagem_repository import LavagemRepository
 from repositories.cliente_repository import ClienteRepository
 from repositories.veiculo_repository import VeiculoRepository
+from repositories.agendamento_repository import AgendamentoRepository
 from middlewares.validate_user_auth_token import validate_user_auth_token
 from fastapi import APIRouter, Depends, Response
 from sqlalchemy.orm import Session
@@ -18,6 +19,9 @@ def registrar_chegada(
     db: Session = Depends(get_db),
 ):
     registrar_chegada_use_case = RegistrarChegadaUseCase(
-        LavagemRepository(db), ClienteRepository(db), VeiculoRepository(db)
+        LavagemRepository(db),
+        ClienteRepository(db),
+        VeiculoRepository(db),
+        AgendamentoRepository(db),
     )
     return registrar_chegada_use_case.execute(chegada_dto, response)

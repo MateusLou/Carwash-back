@@ -33,6 +33,7 @@ class ListLavagensUseCase:
             "funcionario_id": list_dto.funcionario_id,
             "tipo_carro": list_dto.tipo_carro,
             "cliente_id": list_dto.cliente_id,
+            "cliente_nome": list_dto.cliente_nome,
         }
 
         lavagens = self.lavagem_repository.list_by_filtros(

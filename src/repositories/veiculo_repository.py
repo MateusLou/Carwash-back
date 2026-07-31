@@ -14,6 +14,9 @@ class VeiculoRepository(BaseRepository[VeiculoModel]):
     def __init__(self, session: Session):
         super().__init__(session, VeiculoModel)
 
+    def get_by_id(self, veiculo_id: int) -> VeiculoModel | None:
+        return self.session.query(self.model).filter(self.model.id == veiculo_id).first()
+
     def get_by_placa(self, placa: str) -> VeiculoModel | None:
         return (
             self.session.query(self.model)
@@ -59,4 +62,31 @@ class VeiculoRepository(BaseRepository[VeiculoModel]):
         if mudou:
             self.session.commit()
             self.session.refresh(veiculo)
+        return veiculo
+
+    def atualizar(
+        self,
+        veiculo: VeiculoModel,
+        placa: Optional[str] = None,
+        tipo: Optional[str] = None,
+        modelo: Optional[str] = None,
+        cliente_id: Optional[int] = None,
+    ) -> VeiculoModel:
+        """Grava o que veio, por cima do que estava.
+
+        Diferente do `get_or_create`, que só preenche campo vazio: aqui o
+        atendente escolheu este veículo na tela e está olhando para o carro, e
+        se ele corrige o modelo é porque o cadastro estava errado. É também
+        como um veículo importado sem placa ganha a placa no primeiro check-in.
+        """
+        for campo, valor in (
+            ("placa", normalizar_placa(placa) if placa else None),
+            ("tipo", tipo),
+            ("modelo", modelo),
+            ("cliente_id", cliente_id),
+        ):
+            if valor:
+                setattr(veiculo, campo, valor)
+        self.session.commit()
+        self.session.refresh(veiculo)
         return veiculo

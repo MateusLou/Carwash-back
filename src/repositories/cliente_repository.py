@@ -1,8 +1,10 @@
+import re
+
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from repositories.base_repository import BaseRepository
 from models.cliente_model import ClienteModel
-from utils.normalizar_texto import normalizar_texto, normalizar_telefone
+from utils.normalizar_texto import normalizar_texto, normalizar_telefone, normalizar_cpf
 from typing import Optional
 
 
@@ -12,6 +14,13 @@ class ClienteRepository(BaseRepository[ClienteModel]):
 
     def get_by_id(self, cliente_id: int) -> ClienteModel | None:
         return self.session.query(self.model).filter(self.model.id == cliente_id).first()
+
+    def get_by_cpf(self, cpf: str) -> ClienteModel | None:
+        return (
+            self.session.query(self.model)
+            .filter(self.model.cpf == normalizar_cpf(cpf))
+            .first()
+        )
 
     def get_by_telefone(self, telefone: str) -> ClienteModel | None:
         return (
@@ -29,12 +38,13 @@ class ClienteRepository(BaseRepository[ClienteModel]):
 
     def buscar(self, termo: str, limite: int = 20) -> list[ClienteModel]:
         """Busca do autocomplete do check-in: casa por pedaço do nome (sem
-        acento) ou por pedaço do telefone."""
+        acento), do telefone ou do CPF."""
         alvo = normalizar_texto(termo)
-        digitos = normalizar_telefone(termo)
+        digitos = re.sub(r"\D", "", termo)
         condicoes = [self.model.nome_normalizado.like(f"%{alvo}%")]
         if digitos:
             condicoes.append(self.model.telefone.like(f"%{digitos}%"))
+            condicoes.append(self.model.cpf.like(f"%{digitos}%"))
         return (
             self.session.query(self.model)
             .filter(or_(*condicoes))
@@ -44,42 +54,80 @@ class ClienteRepository(BaseRepository[ClienteModel]):
         )
 
     def get_or_create(
-        self, nome: Optional[str] = None, telefone: Optional[str] = None
+        self,
+        cpf: Optional[str] = None,
+        nome: Optional[str] = None,
+        telefone: Optional[str] = None,
     ) -> ClienteModel | None:
         """Acha o cliente ou cria um novo.
 
-        O telefone manda: é chave de verdade. O nome é o desempate herdado da
-        base histórica, que não tem telefone nenhum — dois clientes de mesmo
-        nome viram um só, e não há como evitar isso sem telefone. Quando o
-        cadastro achado por nome ainda não tem telefone e agora veio um, o
-        telefone é preenchido: é o cadastro antigo ganhando identidade real.
+        O CPF manda: é o que o check-in exige e a única chave que a base
+        histórica tem completa. Telefone vem depois — é ele que amarra o
+        cadastro ao WhatsApp — e o nome é o último recurso, herdado da
+        importação, onde dois homônimos viram um só e não há como evitar.
+
+        Para quem foi achado pelo CPF, nome e telefone informados
+        **sobrescrevem** o que estava lá: a tela mostra os dois preenchidos e
+        editáveis, então uma correção do atendente tem de valer. Nos outros
+        casos vale a regra antiga, de só preencher o que está vazio.
         """
-        if not nome and not telefone:
+        cpf_norm = normalizar_cpf(cpf) if cpf else None
+        telefone_norm = normalizar_telefone(telefone) if telefone else None
+        if not cpf_norm and not nome and not telefone_norm:
             return None
 
-        cliente = None
-        if telefone:
-            cliente = self.get_by_telefone(telefone)
-        if cliente is None and nome:
-            cliente = self.get_by_nome(nome)
+        cliente = self.get_by_cpf(cpf_norm) if cpf_norm else None
 
         if cliente is None:
-            cliente = ClienteModel(
-                nome=nome,
-                nome_normalizado=normalizar_texto(nome) if nome else None,
-                telefone=normalizar_telefone(telefone) if telefone else None,
-            )
-            return self.add(cliente)
+            # Cadastro antigo sem CPF ganha identidade agora. Quem já tem OUTRO
+            # CPF não é a mesma pessoa — são dois homônimos, ou um telefone que
+            # trocou de dono —, e roubar o cadastro dele apagaria um CPF certo.
+            candidato = self.get_by_telefone(telefone_norm) if telefone_norm else None
+            if candidato is None and nome:
+                candidato = self.get_by_nome(nome)
+            if candidato is not None and not (cpf_norm and candidato.cpf):
+                cliente = candidato
 
+        if cliente is None:
+            return self.add(
+                ClienteModel(
+                    cpf=cpf_norm,
+                    nome=nome,
+                    nome_normalizado=normalizar_texto(nome) if nome else None,
+                    telefone=telefone_norm,
+                )
+            )
+
+        achado_por_cpf = bool(cpf_norm and cliente.cpf == cpf_norm)
         mudou = False
-        if telefone and not cliente.telefone:
-            cliente.telefone = normalizar_telefone(telefone)
+
+        if cpf_norm and not cliente.cpf:
+            cliente.cpf = cpf_norm
             mudou = True
-        if nome and not cliente.nome:
+        if nome and cliente.nome != nome and (achado_por_cpf or not cliente.nome):
             cliente.nome = nome
             cliente.nome_normalizado = normalizar_texto(nome)
             mudou = True
+        if (
+            telefone_norm
+            and cliente.telefone != telefone_norm
+            and (achado_por_cpf or not cliente.telefone)
+            and self._telefone_livre(telefone_norm, cliente.id)
+        ):
+            cliente.telefone = telefone_norm
+            mudou = True
+
         if mudou:
             self.session.commit()
             self.session.refresh(cliente)
         return cliente
+
+    def _telefone_livre(self, telefone: str, cliente_id: int) -> bool:
+        """O telefone é único no banco.
+
+        Um dígito errado do atendente não pode derrubar o check-in com
+        IntegrityError: quando o número já é de outro cadastro, este fica com o
+        telefone antigo e a lavagem entra assim mesmo.
+        """
+        dono = self.get_by_telefone(telefone)
+        return dono is None or dono.id == cliente_id

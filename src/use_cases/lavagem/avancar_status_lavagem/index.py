@@ -5,6 +5,7 @@ from use_cases.lavagem.avancar_status_lavagem.avancar_status_lavagem_dto import 
     AvancarStatusLavagemDTO,
 )
 from repositories.lavagem_repository import LavagemRepository
+from repositories.agendamento_repository import AgendamentoRepository
 from middlewares.validate_user_auth_token import validate_user_auth_token
 from fastapi import APIRouter, Depends, Response
 from sqlalchemy.orm import Session
@@ -20,5 +21,7 @@ def avancar_status_lavagem(
     response: Response,
     db: Session = Depends(get_db),
 ):
-    avancar_status_use_case = AvancarStatusLavagemUseCase(LavagemRepository(db))
+    avancar_status_use_case = AvancarStatusLavagemUseCase(
+        LavagemRepository(db), AgendamentoRepository(db)
+    )
     return avancar_status_use_case.execute(lavagem_id, avancar_dto, response)

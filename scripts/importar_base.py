@@ -14,6 +14,13 @@ Feito para sobreviver à base que ainda vai chegar. Três mecanismos:
 
 Reimportar o mesmo arquivo não duplica nada: `id_externo` (o `id_lavagem` da
 planilha) tem índice único e o insert usa ON CONFLICT DO NOTHING.
+
+O cliente é deduplicado por **CPF** quando a planilha traz a coluna, e só cai
+para o nome quando não traz. Dedup por nome perde gente: na base imputada são 795
+CPFs contra 789 nomes, porque sete pessoas ficaram com o nome "Não informado".
+
+Para recarregar do zero, `--recomecar` esvazia as tabelas do schema `operacao`
+antes de importar. Sem ele o script nunca apaga nada.
 """
 
 import argparse
@@ -36,7 +43,11 @@ from models.lavagem_model import LavagemModel  # noqa: E402
 from models.veiculo_model import VeiculoModel  # noqa: E402
 from entities.lavagem import minutos_entre  # noqa: E402
 from repositories.veiculo_repository import normalizar_placa  # noqa: E402
-from utils.normalizar_texto import normalizar_texto, normalizar_telefone  # noqa: E402
+from utils.normalizar_texto import (  # noqa: E402
+    normalizar_cpf,
+    normalizar_telefone,
+    normalizar_texto,
+)
 
 
 # Colunas que viram coluna de mesmo nome na tabela de lavagens.
@@ -68,6 +79,7 @@ COLUNAS_DIRETAS = (
 COLUNAS_ESPECIAIS = {
     "id_lavagem": "id_externo",
     "data": "data",
+    "cpf": "cpf",
     "cliente": "cliente",
     "telefone": "telefone",
     "placa": "placa",
@@ -111,6 +123,20 @@ APELIDOS = {
 # Derivadas de `data` — não viram coluna, para não haver duas versões do mesmo
 # fato no banco (o dashboard tira ano/mês/dia da semana com date_trunc).
 COLUNAS_IGNORADAS = ("ano", "mes", "mês", "dia_semana")
+
+# O que a imputação escreveu no lugar do nome que faltava. Guardar isso como
+# nome real criaria 7 cadastros homônimos falsos — é um nulo, e entra como nulo.
+NOME_PLACEHOLDER = "nao informado"
+
+# Tabelas que este script possui. O `--recomecar` esvazia exatamente estas, e
+# nenhuma do `public` — lá moram os agendamentos e conversas do bot e o login.
+TABELAS_DA_PLATAFORMA = (
+    "operacao.lavagens",
+    "operacao.veiculos",
+    "operacao.clientes",
+    "operacao.funcionarios",
+    "operacao.importacoes",
+)
 
 LOTE_PADRAO = 5000
 
@@ -234,12 +260,98 @@ def upsert_por_nome(session, model, nomes: set[str]) -> dict[str, int]:
     return existentes
 
 
+def nome_do_cliente(valor) -> str | None:
+    """O nome como texto, ou None quando é o placeholder da imputação.
+
+    "Não informado" é o que a imputação escreveu onde o nome faltava. É um nulo
+    escrito por extenso, e entra no banco como nulo.
+    """
+    if not valor:
+        return None
+    nome = str(valor).strip()
+    if not nome or normalizar_texto(nome) == NOME_PLACEHOLDER:
+        return None
+    return nome
+
+
+def upsert_clientes_por_cpf(session, pares: dict[str, str | None]) -> dict[str, int]:
+    """Garante que cada CPF exista em clientes e devolve cpf → id.
+
+    `pares` é cpf normalizado → nome (ou None). Mesmas três queries do
+    `upsert_por_nome`, pela mesma razão: um get_or_create por linha levaria
+    minutos contra o Supabase.
+
+    O nome entra junto, mas quem manda é o CPF — dois homônimos de CPF diferente
+    são duas linhas, e é para isso que o índice do nome deixou de ser único.
+    """
+    if not pares:
+        return {}
+
+    existentes = dict(
+        session.execute(
+            select(ClienteModel.cpf, ClienteModel.id).where(
+                ClienteModel.cpf.in_(list(pares))
+            )
+        ).all()
+    )
+
+    faltando = [
+        {
+            "cpf": cpf,
+            "nome": nome,
+            "nome_normalizado": normalizar_texto(nome) if nome else None,
+        }
+        for cpf, nome in pares.items()
+        if cpf not in existentes
+    ]
+    if faltando:
+        session.execute(insert(ClienteModel).values(faltando).on_conflict_do_nothing())
+        session.commit()
+        existentes = dict(
+            session.execute(
+                select(ClienteModel.cpf, ClienteModel.id).where(
+                    ClienteModel.cpf.in_(list(pares))
+                )
+            ).all()
+        )
+    return existentes
+
+
+def recomecar(session) -> None:
+    """Esvazia as tabelas da plataforma para uma carga do zero.
+
+    Destrutivo e irreversível, por isso atrás de confirmação digitada. O
+    `public` fica intacto: agendamentos e conversas do bot, e o login, não são
+    deste script. RESTART IDENTITY para os ids voltarem a começar do 1.
+    """
+    print("\n⚠️  --recomecar vai APAGAR, no schema operacao:")
+    for tabela in TABELAS_DA_PLATAFORMA:
+        total = session.execute(text(f"select count(*) from {tabela}")).scalar()
+        print(f"   {tabela:<24} {total:>10,} linhas")
+    print("   (o schema public — agendamentos, conversas, login — não é tocado)")
+
+    if input('\ndigite "RECOMECAR" para confirmar: ').strip() != "RECOMECAR":
+        print("cancelado.")
+        raise SystemExit(1)
+
+    session.execute(
+        text(f"truncate {', '.join(TABELAS_DA_PLATAFORMA)} restart identity cascade")
+    )
+    session.commit()
+    print("tabelas esvaziadas.\n")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--arquivo", required=True, help="caminho do .xlsx")
     parser.add_argument("--aba", default="lavagens")
     parser.add_argument("--lote", type=int, default=LOTE_PADRAO)
     parser.add_argument("--limite", type=int, default=None, help="importa só as N primeiras linhas")
+    parser.add_argument(
+        "--recomecar",
+        action="store_true",
+        help="APAGA as tabelas do schema operacao antes de importar",
+    )
     args = parser.parse_args()
 
     caminho = Path(args.arquivo).expanduser().resolve()
@@ -261,26 +373,40 @@ def main() -> int:
             print(f"ausente ....... {esperada} (fica nulo; o check-in preenche daqui pra frente)")
 
     session = SessionLocal()
+    if args.recomecar:
+        recomecar(session)
+
     importacao = ImportacaoModel(arquivo=caminho.name, aba=args.aba)
     session.add(importacao)
     session.commit()
     session.refresh(importacao)
 
     try:
-        # --- passada 1: os nomes ---------------------------------------
+        # --- passada 1: quem é quem ------------------------------------
+        tem_cpf = "cpf" in indice
+        clientes_por_cpf: dict[str, str | None] = {}
         nomes_clientes: set[str] = set()
         nomes_funcionarios: set[str] = set()
         for linha in linhas_da_planilha(caminho, args.aba):
-            if "cliente" in indice and linha[indice["cliente"]]:
-                nomes_clientes.add(str(linha[indice["cliente"]]).strip())
+            nome = nome_do_cliente(linha[indice["cliente"]] if "cliente" in indice else None)
+            if tem_cpf and linha[indice["cpf"]]:
+                cpf = normalizar_cpf(str(linha[indice["cpf"]]))
+                # O primeiro nome não-nulo do CPF ganha: a mesma pessoa aparece
+                # em dezenas de linhas, e em algumas o nome falta.
+                if clientes_por_cpf.get(cpf) is None:
+                    clientes_por_cpf[cpf] = nome
+            elif nome:
+                nomes_clientes.add(nome)
             for coluna in ("funcionario_lavagem", "atendente_pagamento"):
                 if coluna in indice and linha[indice[coluna]]:
                     nomes_funcionarios.add(str(linha[indice[coluna]]).strip())
 
         mapa_funcionarios = upsert_por_nome(session, FuncionarioModel, nomes_funcionarios)
-        mapa_clientes = upsert_por_nome(session, ClienteModel, nomes_clientes)
+        mapa_clientes_cpf = upsert_clientes_por_cpf(session, clientes_por_cpf)
+        mapa_clientes_nome = upsert_por_nome(session, ClienteModel, nomes_clientes)
+        chave = "CPF" if tem_cpf else "nome (a planilha não tem CPF)"
         print(f"funcionários .. {len(mapa_funcionarios)}")
-        print(f"clientes ...... {len(mapa_clientes)}")
+        print(f"clientes ...... {len(mapa_clientes_cpf) + len(mapa_clientes_nome)} por {chave}")
 
         # --- passada 2: as lavagens ------------------------------------
         lote: list[dict] = []
@@ -327,12 +453,19 @@ def main() -> int:
             if "servico" in indice and linha[indice["servico"]]:
                 registro["servico"] = linha[indice["servico"]]
 
-            # cliente: casa por telefone quando existe, senão pelo nome
-            nome_cliente = str(linha[indice["cliente"]]).strip() if (
-                "cliente" in indice and linha[indice["cliente"]]
-            ) else None
-            if nome_cliente:
-                registro["cliente_id"] = mapa_clientes.get(normalizar_texto(nome_cliente))
+            # cliente: o CPF manda; sem ele, casa pelo nome
+            if tem_cpf and linha[indice["cpf"]]:
+                registro["cliente_id"] = mapa_clientes_cpf.get(
+                    normalizar_cpf(str(linha[indice["cpf"]]))
+                )
+            else:
+                nome_cliente = nome_do_cliente(
+                    linha[indice["cliente"]] if "cliente" in indice else None
+                )
+                if nome_cliente:
+                    registro["cliente_id"] = mapa_clientes_nome.get(
+                        normalizar_texto(nome_cliente)
+                    )
 
             for origem, destino in (("funcionario_lavagem", "funcionario_lavagem_id"),
                                     ("atendente_pagamento", "atendente_pagamento_id")):

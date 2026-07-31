@@ -3,9 +3,12 @@ from sqlalchemy import func, distinct, cast, literal, Date
 from repositories.base_repository import BaseRepository
 from models.lavagem_model import LavagemModel
 from models.funcionario_model import FuncionarioModel
+from models.cliente_model import ClienteModel
 from entities.lavagem import STATUS_ABERTOS
+from utils.normalizar_texto import normalizar_texto
 from datetime import date
 from typing import Optional
+from uuid import UUID
 
 # "semana"/"mes" do filtro do dashboard → o argumento que o date_trunc entende.
 GRANULARIDADES = {"dia": "day", "semana": "week", "mes": "month"}
@@ -47,6 +50,33 @@ class LavagemRepository(BaseRepository[LavagemModel]):
     def get_by_id_externo(self, id_externo: int) -> LavagemModel | None:
         return self.session.query(self.model).filter(self.model.id_externo == id_externo).first()
 
+    def get_by_agendamento_id(self, agendamento_id: UUID) -> LavagemModel | None:
+        """A lavagem que nasceu deste agendamento, se o carro já chegou.
+
+        É a trava do check-in: um agendamento vira um carro no pátio, não dois.
+        """
+        return (
+            self.session.query(self.model)
+            .filter(self.model.agendamento_id == agendamento_id)
+            .first()
+        )
+
+    def mapa_por_agendamentos(self, agendamento_ids: list[UUID]) -> dict[UUID, LavagemModel]:
+        """A lavagem de cada agendamento da página, numa consulta só.
+
+        A aba de agendamentos mostra em que ponto o carro está; perguntar isso
+        linha a linha seria uma ida ao Supabase por agendamento.
+        """
+        if not agendamento_ids:
+            return {}
+        lavagens = (
+            self.session.query(self.model)
+            .filter(self.model.agendamento_id.in_(agendamento_ids))
+            .order_by(self.model.id)
+            .all()
+        )
+        return {lavagem.agendamento_id: lavagem for lavagem in lavagens}
+
     def list_patio(self) -> list[LavagemModel]:
         """O que está aberto agora, do que chegou primeiro para o mais recente."""
         return (
@@ -71,6 +101,7 @@ class LavagemRepository(BaseRepository[LavagemModel]):
         funcionario_id: Optional[int] = None,
         tipo_carro: Optional[str] = None,
         cliente_id: Optional[int] = None,
+        cliente_nome: Optional[str] = None,
     ):
         if data_inicio is not None:
             query = query.filter(self.model.data >= data_inicio)
@@ -84,6 +115,19 @@ class LavagemRepository(BaseRepository[LavagemModel]):
             query = query.filter(self.model.tipo_carro == tipo_carro)
         if cliente_id is not None:
             query = query.filter(self.model.cliente_id == cliente_id)
+        if cliente_nome:
+            # Subquery em vez de join: esta função é a base de todo o dashboard
+            # (via _validas), e um join a mais mudaria a cardinalidade daquelas
+            # agregações — além de colidir com o join que
+            # produtividade_por_funcionario já faz.
+            # O LIKE cai sobre nome_normalizado, que já está sem acento e em
+            # minúsculas: é o mesmo truque de ClienteRepository.buscar, e por
+            # isso "jose" acha "José" sem precisar de ILIKE.
+            alvo = normalizar_texto(cliente_nome)
+            clientes = self.session.query(ClienteModel.id).filter(
+                ClienteModel.nome_normalizado.like(f"%{alvo}%")
+            )
+            query = query.filter(self.model.cliente_id.in_(clientes))
         return query
 
     def list_by_filtros(self, limite: int = 200, offset: int = 0, **filtros) -> list[LavagemModel]:
