@@ -21,6 +21,11 @@ python-dotenv==1.0.1
 # Email
 sendgrid==6.11.0
 
+# WhatsApp (Z-API) — src/utils/enviar_whatsapp.py
+# Primeira chamada HTTP de saída do backend: até aqui nada em src/ falava com a
+# rede. É a mesma API que o chatbot do n8n usa para responder no WhatsApp.
+requests==2.32.5
+
 # Data Validation
 # Mesmo motivo do psycopg2: o pydantic-core do 2.7.1 não tem wheel para 3.13.
 pydantic==2.10.6
