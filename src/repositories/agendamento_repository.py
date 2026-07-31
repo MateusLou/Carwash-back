@@ -73,16 +73,25 @@ class AgendamentoRepository(BaseRepository[AgendamentoModel]):
         return {servico: total for servico, total in rows}
 
     def count_by_dia(
-        self, data_inicio: Optional[date] = None, data_fim: Optional[date] = None
+        self,
+        data_inicio: Optional[date] = None,
+        data_fim: Optional[date] = None,
+        sem_cancelados: bool = False,
     ) -> list[tuple[date, int]]:
-        """Série diária para o gráfico do dashboard."""
+        """Série diária para o gráfico do dashboard.
+
+        `sem_cancelados` segue a regra de `Agendamento.ocupa_vaga()`: na visão
+        de agenda, cancelado não é trabalho que vem aí.
+        """
+        query = self._aplicar_filtros(
+            self.session.query(self.model.data_agendamento, func.count()),
+            data_inicio,
+            data_fim,
+        )
+        if sem_cancelados:
+            query = query.filter(self.model.status != "cancelado")
         return (
-            self._aplicar_filtros(
-                self.session.query(self.model.data_agendamento, func.count()),
-                data_inicio,
-                data_fim,
-            )
-            .group_by(self.model.data_agendamento)
+            query.group_by(self.model.data_agendamento)
             .order_by(self.model.data_agendamento)
             .all()
         )

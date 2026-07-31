@@ -9,6 +9,17 @@ class UserRepository(BaseRepository[UserModel]):
         
     def get_by_email(self, email: str) -> UserModel | None:
         return self.session.query(self.model).filter(self.model.email == email).first()
+
+    def list_ativos(self) -> list[UserModel]:
+        """As contas que podem logar, em ordem de id — a ordem importa: no
+        login por senha única, se duas contas tivessem a mesma senha, a
+        primeira ganharia."""
+        return (
+            self.session.query(self.model)
+            .filter(self.model.is_active.is_(True))
+            .order_by(self.model.id)
+            .all()
+        )
     
     def find_by_email(self, email: str) -> list[UserModel]:
         """Busca usuários por email (compatibilidade com código antigo)"""

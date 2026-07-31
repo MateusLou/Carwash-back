@@ -3,7 +3,7 @@ from use_cases.dashboard.get_metricas_operacionais.get_metricas_operacionais_use
 )
 from use_cases.dashboard.periodo_dto import PeriodoDTO, Granularidade
 from repositories.lavagem_repository import LavagemRepository
-from middlewares.validate_user_auth_token import validate_user_auth_token
+from middlewares.validate_dono_auth_token import validate_dono_auth_token
 from fastapi import APIRouter, Depends, Response, Query
 from sqlalchemy.orm import Session
 from database.database import get_db
@@ -13,7 +13,7 @@ from typing import Optional
 router = APIRouter()
 
 
-@router.get("/dashboard/operacional", dependencies=[Depends(validate_user_auth_token)])
+@router.get("/dashboard/operacional", dependencies=[Depends(validate_dono_auth_token)])
 def get_metricas_operacionais(
     response: Response,
     data_inicio: Optional[date] = Query(None),

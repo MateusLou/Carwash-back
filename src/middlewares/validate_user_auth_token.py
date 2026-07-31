@@ -13,7 +13,13 @@ def validate_user_auth_token(request: Request, response: Response):
 
         user_id = payload.get("id")
         user_email = payload.get("email")
-        request.state.auth_payload = {"user_id": user_id, "user_email": user_email}
+        # role ausente em token antigo (o do n8n do assistente, por exemplo)
+        # vira None — os guards tratam None como funcionário, nunca como dono.
+        request.state.auth_payload = {
+            "user_id": user_id,
+            "user_email": user_email,
+            "role": payload.get("role"),
+        }
 
     except jwt.PyJWTError:
         response.delete_cookie("user_auth_token")

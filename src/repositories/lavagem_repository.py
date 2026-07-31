@@ -1,5 +1,6 @@
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import func, distinct, cast, literal, Date
+from sqlalchemy import func, distinct, cast, literal, text, Date
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from repositories.base_repository import BaseRepository
 from models.lavagem_model import LavagemModel
 from models.funcionario_model import FuncionarioModel
@@ -149,6 +150,47 @@ class LavagemRepository(BaseRepository[LavagemModel]):
 
     def contar(self, **filtros) -> int:
         return self._filtrar(self.session.query(func.count(self.model.id)), **filtros).scalar() or 0
+
+    # ------------------------------------------------------------------
+    # importação
+    # ------------------------------------------------------------------
+    def inserir_lote_importado(self, registros: list[dict]) -> int:
+        """Insere um lote da planilha e devolve quantas linhas entraram.
+
+        ON CONFLICT DO NOTHING sobre o `id_externo` é o que torna o re-upload
+        seguro: o arquivo inteiro volta, mas só a aba nova insere de fato. Todo
+        dict do lote precisa ter as MESMAS chaves — o VALUES multi-linha do
+        SQLAlchemy compila um comando só e uma chave a menos derruba a
+        compilação (por isso o molde do motor).
+
+        NÃO comita: no modo substituir a carga inteira é uma transação só.
+        """
+        if not registros:
+            return 0
+        comando = (
+            pg_insert(LavagemModel)
+            .values(registros)
+            .on_conflict_do_nothing(
+                index_elements=["id_externo"],
+                index_where=text("id_externo is not null"),
+            )
+        )
+        resultado = self.session.execute(comando)
+        return resultado.rowcount or 0
+
+    def apagar_importadas(self) -> int:
+        """Apaga só as lavagens vindas de planilha, preservando as da operação.
+
+        É o modo substituir. DELETE seletivo, nunca TRUNCATE: o pátio já tem
+        check-ins reais (`origem='plataforma'`) que não vieram de arquivo
+        nenhum — e um TRUNCATE em cascata a partir de clientes levaria a
+        tabela inteira junto. NÃO comita, pela mesma razão do insert.
+        """
+        return (
+            self.session.query(self.model)
+            .filter(self.model.origem == "importacao")
+            .delete(synchronize_session=False)
+        )
 
     # ------------------------------------------------------------------
     # base das métricas

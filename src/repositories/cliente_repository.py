@@ -1,7 +1,8 @@
 import re
 
 from sqlalchemy.orm import Session
-from sqlalchemy import or_
+from sqlalchemy import or_, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from repositories.base_repository import BaseRepository
 from models.cliente_model import ClienteModel
 from utils.normalizar_texto import normalizar_texto, normalizar_telefone, normalizar_cpf
@@ -23,9 +24,12 @@ class ClienteRepository(BaseRepository[ClienteModel]):
         )
 
     def get_by_telefone(self, telefone: str) -> ClienteModel | None:
+        """Telefone repete entre cadastros; na dúvida, vale o mexido por último —
+        é o dono mais provável do número hoje."""
         return (
             self.session.query(self.model)
             .filter(self.model.telefone == normalizar_telefone(telefone))
+            .order_by(self.model.atualizado_em.desc(), self.model.id.desc())
             .first()
         )
 
@@ -70,6 +74,9 @@ class ClienteRepository(BaseRepository[ClienteModel]):
         **sobrescrevem** o que estava lá: a tela mostra os dois preenchidos e
         editáveis, então uma correção do atendente tem de valer. Nos outros
         casos vale a regra antiga, de só preencher o que está vazio.
+
+        Telefone pode repetir entre cadastros: o mesmo número serve um casal,
+        ou um CPF novo que chega com o número de um cadastro antigo.
         """
         cpf_norm = normalizar_cpf(cpf) if cpf else None
         telefone_norm = normalizar_telefone(telefone) if telefone else None
@@ -112,7 +119,6 @@ class ClienteRepository(BaseRepository[ClienteModel]):
             telefone_norm
             and cliente.telefone != telefone_norm
             and (achado_por_cpf or not cliente.telefone)
-            and self._telefone_livre(telefone_norm, cliente.id)
         ):
             cliente.telefone = telefone_norm
             mudou = True
@@ -122,12 +128,62 @@ class ClienteRepository(BaseRepository[ClienteModel]):
             self.session.refresh(cliente)
         return cliente
 
-    def _telefone_livre(self, telefone: str, cliente_id: int) -> bool:
-        """O telefone é único no banco.
+    def upsert_em_lote_por_cpf(self, pares: dict[str, str | None]) -> dict[str, int]:
+        """Garante que cada CPF exista e devolve cpf → id, em três queries.
 
-        Um dígito errado do atendente não pode derrubar o check-in com
-        IntegrityError: quando o número já é de outro cadastro, este fica com o
-        telefone antigo e a lavagem entra assim mesmo.
+        `pares` é cpf normalizado → nome (ou None). Três queries em vez de um
+        get_or_create por linha: com mil clientes na planilha, linha a linha
+        levaria minutos contra o Supabase. O nome entra junto, mas quem manda é
+        o CPF — dois homônimos de CPF diferente são duas linhas.
+
+        NÃO comita: a importação em modo substituir precisa de uma transação
+        única para a falha devolver o banco inteiro ao estado anterior.
         """
-        dono = self.get_by_telefone(telefone)
-        return dono is None or dono.id == cliente_id
+        if not pares:
+            return {}
+
+        consulta = select(self.model.cpf, self.model.id).where(
+            self.model.cpf.in_(list(pares))
+        )
+        existentes = dict(self.session.execute(consulta).all())
+
+        faltando = [
+            {
+                "cpf": cpf,
+                "nome": nome,
+                "nome_normalizado": normalizar_texto(nome) if nome else None,
+            }
+            for cpf, nome in pares.items()
+            if cpf not in existentes
+        ]
+        if faltando:
+            self.session.execute(pg_insert(self.model).values(faltando).on_conflict_do_nothing())
+            existentes = dict(self.session.execute(consulta).all())
+        return existentes
+
+    def upsert_em_lote_por_nome(self, nomes: set[str]) -> dict[str, int]:
+        """Como o upsert por CPF, mas para planilha sem a coluna de CPF.
+
+        Dedup por nome perde gente (homônimos viram um só) — é o último
+        recurso, não o caminho. Também não comita, pela mesma razão.
+        """
+        normalizados = {
+            normalizar_texto(str(n)): str(n).strip() for n in nomes if n and str(n).strip()
+        }
+        if not normalizados:
+            return {}
+
+        consulta = select(self.model.nome_normalizado, self.model.id).where(
+            self.model.nome_normalizado.in_(list(normalizados))
+        )
+        existentes = dict(self.session.execute(consulta).all())
+
+        faltando = [
+            {"nome": original, "nome_normalizado": chave}
+            for chave, original in normalizados.items()
+            if chave not in existentes
+        ]
+        if faltando:
+            self.session.execute(pg_insert(self.model).values(faltando).on_conflict_do_nothing())
+            existentes = dict(self.session.execute(consulta).all())
+        return existentes

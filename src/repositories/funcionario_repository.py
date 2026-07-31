@@ -1,4 +1,6 @@
 from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from repositories.base_repository import BaseRepository
 from models.funcionario_model import FuncionarioModel
 from utils.normalizar_texto import normalizar_texto
@@ -31,3 +33,34 @@ class FuncionarioRepository(BaseRepository[FuncionarioModel]):
         if funcionario is not None:
             return funcionario
         return self.add(FuncionarioModel(nome=nome, nome_normalizado=normalizar_texto(nome)))
+
+    def upsert_em_lote_por_nome(self, nomes: set[str]) -> dict[str, int]:
+        """Garante que cada nome exista e devolve nome_normalizado → id.
+
+        Três queries em vez de um get_or_create por linha — a importação junta
+        os lavadores e atendentes de todas as abas e resolve tudo de uma vez
+        (funcionário novo numa aba nova entra aqui sozinho).
+
+        NÃO comita: a importação em modo substituir precisa de uma transação
+        única para a falha devolver o banco inteiro ao estado anterior.
+        """
+        normalizados = {
+            normalizar_texto(str(n)): str(n).strip() for n in nomes if n and str(n).strip()
+        }
+        if not normalizados:
+            return {}
+
+        consulta = select(self.model.nome_normalizado, self.model.id).where(
+            self.model.nome_normalizado.in_(list(normalizados))
+        )
+        existentes = dict(self.session.execute(consulta).all())
+
+        faltando = [
+            {"nome": original, "nome_normalizado": chave}
+            for chave, original in normalizados.items()
+            if chave not in existentes
+        ]
+        if faltando:
+            self.session.execute(pg_insert(self.model).values(faltando).on_conflict_do_nothing())
+            existentes = dict(self.session.execute(consulta).all())
+        return existentes
