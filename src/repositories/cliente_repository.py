@@ -1,7 +1,8 @@
 import re
 
 from sqlalchemy.orm import Session
-from sqlalchemy import or_
+from sqlalchemy import or_, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from repositories.base_repository import BaseRepository
 from models.cliente_model import ClienteModel
 from utils.normalizar_texto import normalizar_texto, normalizar_telefone, normalizar_cpf
@@ -126,3 +127,63 @@ class ClienteRepository(BaseRepository[ClienteModel]):
             self.session.commit()
             self.session.refresh(cliente)
         return cliente
+
+    def upsert_em_lote_por_cpf(self, pares: dict[str, str | None]) -> dict[str, int]:
+        """Garante que cada CPF exista e devolve cpf → id, em três queries.
+
+        `pares` é cpf normalizado → nome (ou None). Três queries em vez de um
+        get_or_create por linha: com mil clientes na planilha, linha a linha
+        levaria minutos contra o Supabase. O nome entra junto, mas quem manda é
+        o CPF — dois homônimos de CPF diferente são duas linhas.
+
+        NÃO comita: a importação em modo substituir precisa de uma transação
+        única para a falha devolver o banco inteiro ao estado anterior.
+        """
+        if not pares:
+            return {}
+
+        consulta = select(self.model.cpf, self.model.id).where(
+            self.model.cpf.in_(list(pares))
+        )
+        existentes = dict(self.session.execute(consulta).all())
+
+        faltando = [
+            {
+                "cpf": cpf,
+                "nome": nome,
+                "nome_normalizado": normalizar_texto(nome) if nome else None,
+            }
+            for cpf, nome in pares.items()
+            if cpf not in existentes
+        ]
+        if faltando:
+            self.session.execute(pg_insert(self.model).values(faltando).on_conflict_do_nothing())
+            existentes = dict(self.session.execute(consulta).all())
+        return existentes
+
+    def upsert_em_lote_por_nome(self, nomes: set[str]) -> dict[str, int]:
+        """Como o upsert por CPF, mas para planilha sem a coluna de CPF.
+
+        Dedup por nome perde gente (homônimos viram um só) — é o último
+        recurso, não o caminho. Também não comita, pela mesma razão.
+        """
+        normalizados = {
+            normalizar_texto(str(n)): str(n).strip() for n in nomes if n and str(n).strip()
+        }
+        if not normalizados:
+            return {}
+
+        consulta = select(self.model.nome_normalizado, self.model.id).where(
+            self.model.nome_normalizado.in_(list(normalizados))
+        )
+        existentes = dict(self.session.execute(consulta).all())
+
+        faltando = [
+            {"nome": original, "nome_normalizado": chave}
+            for chave, original in normalizados.items()
+            if chave not in existentes
+        ]
+        if faltando:
+            self.session.execute(pg_insert(self.model).values(faltando).on_conflict_do_nothing())
+            existentes = dict(self.session.execute(consulta).all())
+        return existentes
