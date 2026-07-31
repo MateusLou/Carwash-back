@@ -138,7 +138,8 @@ uvicorn src.app:app --reload
 
 | Método | Rota | O que faz |
 | --- | --- | --- |
-| `POST` | `/lavagens/chegada` | Check-in: telefone, placa, porte. Carimba `chegou_em` |
+| `POST` | `/lavagens/chegada` | Check-in: telefone, placa, porte. Carimba `chegou_em` e **emite o termo de adesão** |
+| `POST` | `/lavagens/{id}/contrato/reenviar` | Manda o termo de novo (aceita `telefone` para corrigir o cadastro) |
 | `PATCH` | `/lavagens/{id}/status` | Avança a etapa, carimba o horário e **fecha a duração do trecho** |
 | `PATCH` | `/lavagens/{id}/pagamento` | Preço, forma de pagamento e NPS |
 | `GET` | `/lavagens/patio` | O que está aberto agora, com o tempo parado em cada etapa |
@@ -167,6 +168,50 @@ Os quatro aceitam `data_inicio`, `data_fim` e `granularidade` (`dia`|`semana`|`m
 **Todas** exigem sessão válida. Sem o cookie respondem **401** — o middleware barra antes
 de o use case rodar.
 
+## O termo de adesão do check-in
+
+Logo depois de a chegada ser gravada, o backend **gera o contrato preenchido e manda no
+WhatsApp do cliente** — o mesmo "TERMO DE ADESÃO DE PRESTAÇÃO DE SERVIÇOS" do papel, com as
+lacunas do PRESTADOR vindas do `.env` e o bloco CLIENTE identificado com o que o atendente
+acabou de coletar (nome, CPF, telefone, veículo, serviço, horário e as avarias da vistoria).
+
+As peças, na ordem em que rodam:
+
+| Onde | O quê |
+| --- | --- |
+| `src/use_cases/lavagem/contrato.py` | **O texto** (as 13 cláusulas, transcritas do PDF original) e a orquestração gera → arquiva → envia. Cláusula muda aqui |
+| `src/utils/gerar_pdf.py` | O desenho do A4 (fpdf2). Único arquivo que sabe qual biblioteca de PDF existe |
+| `src/utils/storage_contratos.py` | O arquivamento no Supabase Storage (bucket **privado** `contratos`) |
+| `src/utils/enviar_whatsapp.py` | `enviar_whatsapp_documento` — o PDF vai em **base64 no corpo**, nenhuma URL é criada |
+| `src/entities/vistoria.py` | Os 13 ids de zona do diagrama, espelho do `DiagramaVeiculo.tsx` do front |
+
+Três decisões que valem conhecer:
+
+- **O check-in nunca falha por causa do contrato.** PDF, Storage ou Z-API fora do ar não
+  desfazem a chegada: o resultado volta na chave `contrato` da resposta e fica em
+  `dados_extras["contrato"]` para diagnóstico. É o mesmo desenho do aviso de "carro pronto".
+- **O envio vai em base64, não como link.** O documento carrega nome, CPF e telefone; um link
+  assinado em conversa de WhatsApp é um acesso que não se revoga.
+- **Sem telefone, o contrato não sai** — a tela avisa, e o card do Pátio ganha o botão
+  **Reenviar contrato**, que aceita o número certo e corrige o cadastro junto.
+
+Para desligar: deixe as três `ZAPI_*` em branco (nada é enviado) e/ou as `SUPABASE_*` de
+Storage em branco (nada é arquivado). Para testar sem mandar mensagem de verdade:
+
+```bash
+python scripts/zapi_falso.py           # Z-API de mentira em localhost:8099
+# e no .env: ZAPI_BASE_URL="http://localhost:8099"
+```
+
+```bash
+python scripts/testar_contrato.py      # gera 6 PDFs de exemplo, sem rede e sem banco
+```
+
+O bucket `contratos` se cria no painel do Supabase: **Storage → New bucket → nome
+`contratos` → Public bucket DESMARCADO** (o PDF tem CPF; público seria vazamento). CNPJ, RG
+e CPF do representante ainda não informados saem como `[CNPJ a informar]` no PDF — preencha
+no `.env` quando tiver os documentos.
+
 ## Os cinco estados de uma lavagem
 
 Não são decoração: cada transição carimba um horário, e a diferença entre dois carimbos
@@ -179,18 +224,27 @@ aguardando ──inicia──> em_lavagem ──termina──> pronta ──clie
     └──── espera ────────────┘                    └──── pós-lavagem ──────┘
 ```
 
-É isso que faz a lavagem registrada hoje e as 37 mil importadas caírem no mesmo gráfico:
+É isso que faz a lavagem registrada hoje e as 15 mil importadas caírem no mesmo gráfico:
 a **duração em minutos é sempre a fonte das métricas**; quem tem carimbo calcula a duração
 e grava. Linha importada não tem relógio (os registros viviam no papel) — só duração.
 
 ## Importar uma planilha
 
 ```bash
-python scripts/importar_base.py --arquivo "../base tratada.xlsx"
+python scripts/importar_base.py --arquivo ../dados/base_imputada.xlsx
 ```
 
 Reimportar o mesmo arquivo não duplica nada: `id_externo` (o `id_lavagem` da planilha) tem
 índice único.
+
+Para recarregar do zero, `--recomecar` esvazia `lavagens`, `veiculos`, `clientes`,
+`funcionarios` e `importacoes` antes de importar — atrás de confirmação digitada, e sem
+tocar no `public` (agendamentos e conversas do bot, e o login). Sem a flag, o script nunca
+apaga nada.
+
+O cliente é deduplicado pelo **CPF** quando a planilha traz a coluna, e só cai para o nome
+quando não traz. Por nome se perderia gente: a base imputada tem 795 CPFs para 789 nomes,
+porque sete pessoas ficaram com o nome "Não informado" — que entra no banco como nulo.
 
 O importador foi feito para a base que **ainda vai chegar**, em três camadas:
 
